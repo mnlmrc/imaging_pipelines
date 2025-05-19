@@ -9,7 +9,7 @@ import nibabel as nb
 import pandas as pd
 
 
-def make_cifti_betas(path_glm, masks, struct, row_axis=None):
+def make_cifti_betas(path_glm, masks, struct, betas=None, row_axis=None):
     """
     Generates a CIFTI file containing beta coefficients for specific regions of interest (ROIs)
     based on a General Linear Model (GLM). It integrates spatial information, structures, and
@@ -28,6 +28,10 @@ def make_cifti_betas(path_glm, masks, struct, row_axis=None):
     - struct (list of str):
         A list of CIFTI brain structures corresponding to each mask. Examples include `CortexRight`,
         `CortexLeft`, or `Cerebellum`.
+
+    - betas (optional, list of str):
+        A list of file name corresponding to the beta coefficients extracted for each regressor
+        in the first-level GLM. If not provided the function looks for SPM.mat file in path_glm.
 
     - row_axis (optional, None or nb.cifti2.Axis):
         Defines the rows (e.g., beta labels) of the resulting CIFTI file. If not provided, it is
@@ -80,8 +84,6 @@ def make_cifti_betas(path_glm, masks, struct, row_axis=None):
     - The CIFTI file can be processed further for visualization or statistical analysis in
       compatible neuroimaging software.
     """
-    SPM = spm.SpmGlm(path_glm)  #
-    SPM.get_info_from_spm_mat()
 
     for i, (s, mask) in enumerate(zip(struct, masks)):
         atlas = am.AtlasVolumetric('region', mask, structure=s)
@@ -93,7 +95,14 @@ def make_cifti_betas(path_glm, masks, struct, row_axis=None):
             brain_axis += atlas.get_brain_model_axis()
             coords = np.concatenate((coords, nt.get_mask_coords(mask)), axis=1)
 
-    betas, _, info = SPM.get_betas(coords)
+    if betas is None:
+        SPM = spm.SpmGlm(path_glm)  #
+        SPM.get_info_from_spm_mat()
+        betas, _, info = SPM.get_betas(coords)
+    else:
+        betas = nt.sample_images(betas, coords, use_dataobj=False)
+        if row_axis is None:
+            raise ValueError("If 'betas' is provided, 'row_axis' must also be specified.")
 
     if row_axis is None:
         reg_name = np.array([n.split('*')[0] for n in info['reg_name']])
