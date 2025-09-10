@@ -4,7 +4,7 @@ import nibabel as nb
 import rsatoolbox as rsa
 import nitools as nt
 
-def calc_rdm_roi(mask, beta_img, res_img, Hem=None, roi=None, sn=None, unbalanced=False):
+def calc_rdm_roi(mask, beta_img, res_img, Hem=None, roi=None, sn=None, unbalanced=False, runs_of_interest=None):
     """
     Calculates the representational dissimilarity matrix (RDM) for a specified region of interest (ROI)
     by preprocessing functional neuroimaging data and using the cross-validated Crossnobis method.
@@ -38,8 +38,14 @@ def calc_rdm_roi(mask, beta_img, res_img, Hem=None, roi=None, sn=None, unbalance
     betas_prewhitened = betas_prewhitened[:, ~np.all(np.isnan(betas_prewhitened), axis=0)]
 
     reginfo = np.char.split(beta_cifti.header.get_axis(0).name, sep='.')
-    conds = [r[0] for r in reginfo]
-    run = [r[1] for r in reginfo]
+    conds = np.array([r[0] for r in reginfo])
+    run = np.array([int(r[1]) for r in reginfo])
+
+    if runs_of_interest is not None:
+        betas_prewhitened = betas_prewhitened[np.isin(run, runs_of_interest)]
+        conds = conds[np.isin(run, runs_of_interest)]
+        run = run[np.isin(run, runs_of_interest)]
+
     dataset = rsa.data.Dataset(
         betas_prewhitened,
         channel_descriptors={
