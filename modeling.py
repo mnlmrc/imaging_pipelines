@@ -32,54 +32,54 @@ def normalize_Ac(Ac):
         Ac[a] = Ac[a] / np.sqrt(tr)
     return Ac
 
-def prewhiten(betas, res, lam=0.1, eps=1e-8):
-    """
-    betas: (n_cond, V)
-    res:   (V,) ResMS  OR  residuals as (T, V) or (V, T)
-    Returns: betas_wh, keep_mask
-    """
-    n_cond, V = betas.shape
-    keep = np.ones(V, dtype=bool)
+# def prewhiten(betas, res, lam=0.1, eps=1e-8):
+#     """
+#     betas: (n_cond, V)
+#     res:   (V,) ResMS  OR  residuals as (T, V) or (V, T)
+#     Returns: betas_wh, keep_mask
+#     """
+#     n_cond, V = betas.shape
+#     keep = np.ones(V, dtype=bool)
+#
+#     # univariate prewhitening
+#     if res.ndim == 1:
+#         r = res.astype(float)
+#         bad = ~np.isfinite(r) | np.isclose(r, 0.0, atol=1e-6) | np.isnan(betas).all(axis=0)
+#         keep &= ~bad
+#         scale = np.sqrt(np.clip(r[keep], eps, None))
+#         return betas[:, keep] / scale
+#
+#     # multivariate prewhitening
+#     R = res
+#     if R.shape == (V, R.shape[1]):     # (V, T)
+#         R = R.T                        # -> (T, V)
+#     if R.shape[1] != V:
+#         raise ValueError("Residuals do not match number of voxels in betas.")
+#
+#     # drop bad voxels
+#     bad = ~np.isfinite(R).all(axis=0) | np.isclose(R.var(axis=0), 0.0, atol=1e-10) | np.isnan(betas).all(axis=0)
+#     keep &= ~bad
+#     R = R[:, keep]
+#     B = betas[:, keep]
+#
+#     T = R.shape[0] - 1
+#     Sigma = (R.T @ R) / T
+#
+#     # regularisation
+#     if lam and lam > 0:
+#         mu = np.mean(np.diag(Sigma))
+#         Sigma = (1 - lam) * Sigma + lam * mu * np.eye(Sigma.shape[0])
+#
+#     w, U = np.linalg.eigh(Sigma)
+#     w = np.clip(w, eps, None)
+#     W = (U * (1.0 / np.sqrt(w))) @ U.T   # Σ^{-1/2}
+#
+#     return B @ W
 
-    # univariate prewhitening
-    if res.ndim == 1:
-        r = res.astype(float)
-        bad = ~np.isfinite(r) | np.isclose(r, 0.0, atol=1e-6) | np.isnan(betas).all(axis=0)
-        keep &= ~bad
-        scale = np.sqrt(np.clip(r[keep], eps, None))
-        return betas[:, keep] / scale
 
-    # multivariate prewhitening
-    R = res
-    if R.shape == (V, R.shape[1]):     # (V, T)
-        R = R.T                        # -> (T, V)
-    if R.shape[1] != V:
-        raise ValueError("Residuals do not match number of voxels in betas.")
-
-    # drop bad voxels
-    bad = ~np.isfinite(R).all(axis=0) | np.isclose(R.var(axis=0), 0.0, atol=1e-10) | np.isnan(betas).all(axis=0)
-    keep &= ~bad
-    R = R[:, keep]
-    B = betas[:, keep]
-
-    T = R.shape[0] - 1
-    Sigma = (R.T @ R) / T
-
-    # regularisation
-    if lam and lam > 0:
-        mu = np.mean(np.diag(Sigma))
-        Sigma = (1 - lam) * Sigma + lam * mu * np.eye(Sigma.shape[0])
-
-    w, U = np.linalg.eigh(Sigma)
-    w = np.clip(w, eps, None)
-    W = (U * (1.0 / np.sqrt(w))) @ U.T   # Σ^{-1/2}
-
-    return B @ W
-
-
-def calc_prewhitened_betas(betas: str | nb.Cifti2Image | nb.nifti1.Nifti1Image,
-                           residuals: str | nb.Cifti2Image | nb.nifti1.Nifti1Image,
-                           mask = str | nb.nifti1.Nifti1Image | np.ndarray,
+def calc_prewhitened_betas(betas: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti1Image,
+                           residuals: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti1Image,
+                           mask = os.PathLike | nb.nifti1.Nifti1Image | np.ndarray,
                            struct_names=['CortexLeft', 'CortexRight'],
                            lam: float=0.1, eps: float=1e-8):
     """
@@ -95,7 +95,7 @@ def calc_prewhitened_betas(betas: str | nb.Cifti2Image | nb.nifti1.Nifti1Image,
     Returns:
 
     """
-    if isinstance(mask, str):
+    if isinstance(mask, os.PathLike):
         mask = nb.load(roi_img)
     if isinstance(mask, nb.nifti1.Nifti1Image):
         coords = nt.get_mask_coords(mask)
@@ -103,7 +103,7 @@ def calc_prewhitened_betas(betas: str | nb.Cifti2Image | nb.nifti1.Nifti1Image,
         assert (mask.ndim==2) & (mask.shape[0]==3), "if mask is an array it must have shape (3, P)"
         coords = mask
 
-    if isinstance(betas, str):
+    if isinstance(betas, os.PathLike):
         cifti_img = nb.load(betas)
     if isinstance(betas, nb.Cifti2Image):
         beta_img = nt.volume_from_cifti(betas, struct_names=struct_names)
@@ -111,7 +111,7 @@ def calc_prewhitened_betas(betas: str | nb.Cifti2Image | nb.nifti1.Nifti1Image,
         beta_img = betas
     betas = nt.sample_image(beta_img, coords[0], coords[1], coords[2], interpolation=0).T
 
-    if isinstance(residuals, str):
+    if isinstance(residuals, os.PathLike):
         residuals = nb.load(residuals)
     if isinstance(residuals, nb.Cifti2Image):
         residuals = nt.volume_from_cifti(residuals, struct_names=struct_names)

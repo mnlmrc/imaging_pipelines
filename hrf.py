@@ -15,6 +15,7 @@ def calc_resms(SPM, y_scl, P, TR, T=16):
 def objective(P, SPM, y_scl, TR, T=16):
     """Objective function: mean ResMS for given P."""
     resms = calc_resms(SPM, y_scl, P, TR, T=T)
+
     return np.nanmean(resms)
 
 def optimise_hrf(SPM, y_scl, P0=None, TR=1, T=16):
@@ -72,12 +73,12 @@ def grid_search_hrf(SPM, y_scl, TR=1.0, T=16, P0=None, grid=None, agg="mean", ve
     # Evaluate every combination
     for combo in itertools.product(*candidates):
         P = np.array(combo, dtype=float)
-        print(f'trying P={P}, best P={best_P}, best ResMS={best_val}') if verbose else None
         resms = calc_resms(SPM, y_scl, P, TR, T=T)
         val = np.nanmean(resms) if agg == "mean" else np.nanmedian(resms)
         all_results.append((P, float(val)))
         if val < best_val:
             best_val = val
             best_P = P
+        print(f'tried P={P}, ResMS={val}, best P={best_P}, best ResMS={best_val}') if verbose else None
 
     return best_P, best_val, all_results
