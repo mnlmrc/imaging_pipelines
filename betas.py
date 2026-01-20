@@ -10,10 +10,10 @@ import nibabel as nb
 import pandas as pd
 
 
-def make_cifti_betas(path_glm: PathLike,
-                     masks: list,
+def make_cifti_betas(masks: list,
                      struct: list,
                      betas: list = None,
+                     path_glm: PathLike = None,
                      row_axis: np.ndarray | pd.Series = None):
     """
 
@@ -39,25 +39,27 @@ def make_cifti_betas(path_glm: PathLike,
             coords = np.concatenate((coords, nt.get_mask_coords(mask)), axis=1)
 
     if betas is None:
+        if path_glm is None:
+            raise ValueError("If betas is not provided, path_glm must be provided to retrieve betas using the SPM.mat file.")
         SPM = spm.SpmGlm(path_glm)  #
         SPM.get_info_from_spm_mat()
         betas, _, info = SPM.get_betas(coords)
     else:
         betas = nt.sample_images(betas, coords, use_dataobj=False)
         if row_axis is None:
-            raise ValueError("If 'betas' is provided, 'row_axis' must also be specified.")
+            raise ValueError("If 'betas' is provided by user, 'row_axis' must also be specified.")
 
     if row_axis is None:
         reg_name = np.array([n.split('*')[0] for n in info['reg_name']])
         row_axis = nb.cifti2.ScalarAxis(reg_name.astype(str) + '.' + info['run_number'].astype(str))
-    else:
+    if isinstance(row_axis, pd.Series):
         row_axis = nb.cifti2.ScalarAxis(row_axis)
-
-    header = nb.Cifti2Header.from_axes((row_axis, brain_axis))
-    cifti = nb.Cifti2Image(
-        dataobj=betas,  # Stack them along the rows (adjust as needed)
-        header=header,  # Use one of the headers (may need to modify)
-    )
+    if isinstance(row_axis, nb.cifti2.ScalarAxis):
+        header = nb.Cifti2Header.from_axes((row_axis, brain_axis))
+        cifti = nb.Cifti2Image(
+            dataobj=betas,  # Stack them along the rows (adjust as needed)
+            header=header,  # Use one of the headers (may need to modify)
+        )
     return cifti
 
 

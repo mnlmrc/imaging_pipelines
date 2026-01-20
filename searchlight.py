@@ -8,7 +8,7 @@ def searchlight_surf(
         mask: str,
         savedir: str,
         roi_mask: Optional[list] = [None, None],
-        radius: Optional[int] = None,
+        radius: Optional[int] = None, # in mm
 ):
 
     structs, Hem = ['CortexLeft', 'CortexRight'], ['L', 'R']
