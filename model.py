@@ -5,6 +5,7 @@ import os
 from os import PathLike
 import nitools as nt
 from joblib import Parallel, delayed, parallel_backend
+from sklearn.covariance import LedoitWolf
 import pickle
 import time
 import errno
@@ -32,50 +33,6 @@ def normalize_Ac(Ac):
         Ac[a] = Ac[a] / np.sqrt(tr)
     return Ac
 
-# def prewhiten(betas, res, lam=0.1, eps=1e-8):
-#     """
-#     betas: (n_cond, V)
-#     res:   (V,) ResMS  OR  residuals as (T, V) or (V, T)
-#     Returns: betas_wh, keep_mask
-#     """
-#     n_cond, V = betas.shape
-#     keep = np.ones(V, dtype=bool)
-#
-#     # univariate prewhitening
-#     if res.ndim == 1:
-#         r = res.astype(float)
-#         bad = ~np.isfinite(r) | np.isclose(r, 0.0, atol=1e-6) | np.isnan(betas).all(axis=0)
-#         keep &= ~bad
-#         scale = np.sqrt(np.clip(r[keep], eps, None))
-#         return betas[:, keep] / scale
-#
-#     # multivariate prewhitening
-#     R = res
-#     if R.shape == (V, R.shape[1]):     # (V, T)
-#         R = R.T                        # -> (T, V)
-#     if R.shape[1] != V:
-#         raise ValueError("Residuals do not match number of voxels in betas.")
-#
-#     # drop bad voxels
-#     bad = ~np.isfinite(R).all(axis=0) | np.isclose(R.var(axis=0), 0.0, atol=1e-10) | np.isnan(betas).all(axis=0)
-#     keep &= ~bad
-#     R = R[:, keep]
-#     B = betas[:, keep]
-#
-#     T = R.shape[0] - 1
-#     Sigma = (R.T @ R) / T
-#
-#     # regularisation
-#     if lam and lam > 0:
-#         mu = np.mean(np.diag(Sigma))
-#         Sigma = (1 - lam) * Sigma + lam * mu * np.eye(Sigma.shape[0])
-#
-#     w, U = np.linalg.eigh(Sigma)
-#     w = np.clip(w, eps, None)
-#     W = (U * (1.0 / np.sqrt(w))) @ U.T   # Σ^{-1/2}
-#
-#     return B @ W
-
 
 def calc_prewhitened_betas(betas: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti1Image,
                            residuals: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti1Image,
@@ -96,7 +53,7 @@ def calc_prewhitened_betas(betas: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti
 
     """
     if isinstance(mask, os.PathLike):
-        mask = nb.load(roi_img)
+        mask = nb.load(mask)
     if isinstance(mask, nb.nifti1.Nifti1Image):
         coords = nt.get_mask_coords(mask)
     if isinstance(mask, np.ndarray):
@@ -104,7 +61,7 @@ def calc_prewhitened_betas(betas: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti
         coords = mask
 
     if isinstance(betas, os.PathLike):
-        cifti_img = nb.load(betas)
+        betas = nb.load(betas)
     if isinstance(betas, nb.Cifti2Image):
         beta_img = nt.volume_from_cifti(betas, struct_names=struct_names)
     if isinstance(betas, nb.nifti1.Nifti1Image):
@@ -144,13 +101,8 @@ def calc_prewhitened_betas(betas: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti
     R = R[:, keep]
     B = betas[:, keep]
 
-    T = R.shape[0] - 1
-    Sigma = (R.T @ R) / T
-
-    # regularisation
-    if lam and lam > 0:
-        mu = np.mean(np.diag(Sigma))
-        Sigma = (1 - lam) * Sigma + lam * mu * np.eye(Sigma.shape[0])
+    cov = LedoitWolf().fit(R)
+    Sigma = cov.covariance_
 
     w, U = np.linalg.eigh(Sigma)
     w = np.clip(w, eps, None)
@@ -167,10 +119,11 @@ class PcmRois():
                  sns: list,
                  M: list,
                  glm_path: PathLike,
-                 cifti_img: str,
+                 beta_cifti: str,
                  res_img: str,
                  roi_path: PathLike,
-                 structnames: list = ['CortexLeft'],
+                 roi_imgs: list = None,
+                 structnames: list = ['CortexLeft', 'CortexRight'],
                  regressor_mapping: dict = None,
                  regr_interest: list = None,
                  n_jobs: int = 12,
@@ -181,30 +134,34 @@ class PcmRois():
         self.snS = sns  # participants ids
         self.M = M  # pcm models to fit
         self.glm_path = glm_path  # path to cifti_img
-        self.cifti_img = cifti_img  # name of cifti_img
+        self.beta_cifti = beta_cifti  # name of cifti_img
         self.roi_path = roi_path  # path to individual roi masks, which must be named <atlas_name>.<H>.<roi>.nii
         self.roi_imgs = roi_imgs  # name of roi files to use as masks, e.g. ROI.L.M1.nii or cerebellum.L.nii
         self.regressor_mapping = regressor_mapping  # dict, maps name of regressors to numbers to control in which order conditions appear in the G matrix
-        self.regr_of_interest = regr_of_interest  # indexes from regressor mapping of the regressors we want to include in the analysis
-        self.cond_order = cond_order # order in which conditions should appear in the G matrix
+        self.regr_interest = regr_interest  # indexes from regressor mapping of the regressors we want to include in the analysis
+        # self.cond_order = cond_order # order in which conditions should appear in the G matrix
         self.res_img = res_img
-        self.struct_names = struct_names
+        self.structnames = structnames
         self.n_jobs = n_jobs
 
-    def _make_dataset_within(self, sn, centre):
-        print(f'making dataset...{sn} - ROI: {centre}')
+    def _make_dataset_within(self, sn, roi_img):
+        print(f'making dataset...{sn} - ROI: {roi_img}')
 
         # load betas
-        cifti_img = nb.load(os.path.join(self.glm_path, sn, self.cifti_img), mmap=False)
-        beta_img = nt.volume_from_cifti(cifti_img, struct_names=[self.structnames])
+        beta_cifti = nb.load(os.path.join(self.glm_path, sn, self.beta_cifti), mmap=False)
+        beta_img = nt.volume_from_cifti(beta_cifti, struct_names=self.structnames)
 
         # load residuals
         res_img = nb.load(os.path.join(self.glm_path, sn, self.res_img))
-        if isinstance(res_img, nb.Cifti2Image):
-            res_img = nt.volume_from_cifti(res_img, struct_names=[self.structnames])
+        if isinstance(res_img, nb.Cifti2Image): # residuals might be cifti (multivariate prew) or nifti (univariate)
+            res_img = nt.volume_from_cifti(res_img, struct_names=self.structnames)
+
+        # load mask
+        mask = nb.load(os.path.join(self.roi_path, sn, roi_img))
+        coords = nt.get_mask_coords(mask)
 
         # load reginfo
-        reginfo = np.char.split(cifti_img.header.get_axis(0).name, sep='.')
+        reginfo = np.char.split(beta_cifti.header.get_axis(0).name, sep='.')
         cond_vec = np.array([r[0] for r in reginfo])
         part_vec = np.array([int(r[1]) for r in reginfo])
 
@@ -230,24 +187,6 @@ class PcmRois():
                                       Y.obs_descriptors['part_vec'],
                                       X=pcm.matrix.indicator(Y.obs_descriptors['part_vec']) #if demean else None
                                       )
-        return Y, G_obs
-
-    def _make_roi_dataset_within(self, roi_img, sn):
-        print(f'making dataset...subj{sn} - {roi_img}')
-        betas_prewhitened, obs_des = calc_prewhitened_betas(glm_path=self.glm_path + '/' + f'subj{sn}',
-                                                            cifti_img='beta.dscalar.nii',
-                                                            res_img=self.res_img,
-                                                            roi_path=self.roi_path,
-                                                            roi_img=f'subj{sn}' + '/' + roi_img,
-                                                            struct_names=self.struct_names,
-                                                            reg_mapping=self.regressor_mapping,
-                                                            reg_interest=self.regr_of_interest, )
-        Y = pcm.dataset.Dataset(betas_prewhitened, obs_descriptors=obs_des)
-        G_obs, _ = pcm.est_G_crossval(Y.measurements,
-                                      Y.obs_descriptors['cond_vec'],
-                                      Y.obs_descriptors['part_vec'],
-                                      X=pcm.matrix.indicator(Y.obs_descriptors['part_vec']) #if demean else None
-                                     )
         return Y, G_obs
 
     def _make_dataset_between(self, roi_img):
@@ -306,7 +245,7 @@ class PcmRois():
             MF = pcm.model.ModelFamily(G, comp_names=comp_names, basecomponents=basecomp)
         elif isinstance(M, pcm.FeatureModel):
             MF = pcm.model.ModelFamily(M, comp_names=comp_names, basecomponents=basecomp)
-        Y, _ = self._make_roi_dataset(roi_img)
+        Y, _ = self._make_dataset_between(roi_img)
         T, theta = pcm.fit_model_individ(Y, MF, verbose=True, fixed_effect='block', fit_scale=False)
 
         return T, theta
@@ -343,7 +282,7 @@ class PcmSearchlight():
                  cifti_img: str,
                  res_img: str,
                  searchlight_path: PathLike,
-                 structnames: list=['CortexLeft'],
+                 structnames: list=['CortexLeft', 'CortexRight'],
                  regressor_mapping: dict=None,
                  regr_interest: list=None,
                  n_jobs: int=16,
