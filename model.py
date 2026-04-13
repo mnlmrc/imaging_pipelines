@@ -38,16 +38,12 @@ def calc_prewhitened_betas(betas: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti
                            residuals: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti1Image,
                            mask = os.PathLike | nb.nifti1.Nifti1Image | np.ndarray,
                            struct_names=['CortexLeft', 'CortexRight'],
-                           lam: float=0.1, eps: float=1e-8):
+                           #lam: float=0.1, 
+                           eps: float=1e-8):
     """
     Get pre-whitened betas from ROI to submit to RSA/PCM
     Args:
-        cifti_img:
-        res_img:
-        roi_img:
-        struct_names:
-        reg_mapping:
-        reg_interest:
+
 
     Returns:
 
@@ -75,40 +71,95 @@ def calc_prewhitened_betas(betas: os.PathLike | nb.Cifti2Image | nb.nifti1.Nifti
     if isinstance(residuals, nb.nifti1.Nifti1Image):
         res = nt.sample_image(residuals, coords[0], coords[1], coords[2], interpolation=0)
 
-    n_cond, V = betas.shape
-    keep = np.ones(V, dtype=bool)
+    # n_cond, V = betas.shape
+    # keep = np.ones(V, dtype=bool)
 
     # univariate prewhitening
     if res.ndim == 1:
         print('Doing univariate prewhitening...')
-        r = res.astype(float)
-        bad = ~np.isfinite(r) | np.isclose(r, 0.0, atol=1e-6) | np.isnan(betas).all(axis=0)
-        keep &= ~bad
-        scale = np.sqrt(np.clip(r[keep], eps, None))
-        return betas[:, keep] / scale
+        return _univariate_prewhitening(betas, res, eps=eps)
+        # r = res.astype(float)
+        # bad = ~np.isfinite(r) | np.isclose(r, 0.0, atol=1e-6) | np.isnan(betas).all(axis=0)
+        # keep &= ~bad
+        # scale = np.sqrt(np.clip(r[keep], eps, None))
+        # return betas[:, keep] / scale
 
     # multivariate prewhitening
     print('Doing multivariate prewhitening...')
-    R = res
+    return _multivariate_prewhitening(betas, res, eps=eps)
+    # R = res
+    # if R.shape == (V, R.shape[1]):  # (V, T)
+    #     R = R.T  # -> (T, V)
+    # if R.shape[1] != V:
+    #     raise ValueError("Residuals do not match number of voxels in betas.")
+
+    # # drop bad voxels
+    # bad = ~np.isfinite(R).all(axis=0) | np.isclose(R.var(axis=0), 0.0, atol=1e-10) | np.isnan(betas).all(axis=0)
+    # keep &= ~bad
+    # R = R[:, keep]
+    # B = betas[:, keep]
+
+    # cov = LedoitWolf().fit(R)
+    # Sigma = cov.covariance_
+    # w, U = np.linalg.eigh(Sigma)
+    # w = np.clip(w, eps, None)
+    # B = (B @ U) * (1.0 / np.sqrt(w))[None, :] # this is more memory efficient than previous version
+    # return B @ U.T
+    #W = (U * (1.0 / np.sqrt(w))) @ U.T  # Σ^{-1/2}
+    #return B @ W
+
+
+def _univariate_prewhitening(B, R, eps=1e-8):
+    n_cond, V = B.shape
+    keep = np.ones(V, dtype=bool)
+    r = R.astype(float)
+    bad = ~np.isfinite(r) | np.isclose(r, 0.0, atol=1e-6) | np.isnan(B).all(axis=0)
+    keep &= ~bad
+    scale = np.sqrt(np.clip(r[keep], eps, None))
+    return B[:, keep] / scale
+
+
+import numpy as np
+
+def _multivariate_prewhitening(B, R, eps=1e-8):
+
+    n_cond, V = B.shape
+    keep = np.ones(V, dtype=bool)
+
     if R.shape == (V, R.shape[1]):  # (V, T)
         R = R.T  # -> (T, V)
     if R.shape[1] != V:
         raise ValueError("Residuals do not match number of voxels in betas.")
 
     # drop bad voxels
-    bad = ~np.isfinite(R).all(axis=0) | np.isclose(R.var(axis=0), 0.0, atol=1e-10) | np.isnan(betas).all(axis=0)
+    bad = ~np.isfinite(R).all(axis=0) | np.isclose(R.var(axis=0), 0.0, atol=1e-10) | np.isnan(B).all(axis=0)
     keep &= ~bad
     R = R[:, keep]
-    B = betas[:, keep]
+    B = B[:, keep]
+
+    # # Low-rank whitening
+    # _, s, Vt = np.linalg.svd(R, full_matrices=False)
+
+    # d = (s ** 2) / max(T - 1, 1)
+    # mu = d.sum() / V
+
+    # f0 = 1.0 / np.sqrt(lam * mu + eps)
+    # fi = 1.0 / np.sqrt((1.0 - lam) * d + lam * mu + eps)
+    # delta = fi - f0
+
+    # BP = B @ Vt.T
+    # BP *= delta[None, :]
+    # B_white = f0 * B + BP @ Vt
 
     cov = LedoitWolf().fit(R)
     Sigma = cov.covariance_
-
     w, U = np.linalg.eigh(Sigma)
     w = np.clip(w, eps, None)
     W = (U * (1.0 / np.sqrt(w))) @ U.T  # Σ^{-1/2}
-
     return B @ W
+    # B = (B @ U) * (1.0 / np.sqrt(w))[None, :] # this is more memory efficient than previous version
+    # return B @ U.T
+
 
 class PcmRois():
     """
@@ -116,48 +167,53 @@ class PcmRois():
     """
 
     def __init__(self,
-                 sns: list,
-                 M: list,
-                 glm_path: PathLike,
-                 beta_cifti: str,
-                 res_img: str,
-                 roi_path: PathLike,
-                 roi_imgs: list = None,
+                 cifti_imgs : list,
+                 res_imgs: list,
+                 roi_names: list,
+                 roi_dict: dict,
+                 M: list = None,
                  structnames: list = ['CortexLeft', 'CortexRight'],
                  regressor_mapping: dict = None,
                  regr_interest: list = None,
-                 n_jobs: int = 12,
+                 function=None, 
+                 function_args={},
+                 n_jobs: int = 8,
                  batch_size: int = 8):
-        # def __init__(self, sns=None, M=None, glm_path=None, cifti_img=None, res_img='ResMS.nii', roi_path=None,
-        #              roi_imgs=None, regressor_mapping=None, struct_names=['CortexLeft', 'CortexRight'],
-        #              regr_of_interest=None, cond_order=None, n_jobs=16):
-        self.snS = sns  # participants ids
+
+        self.M = M  # list of models to fit
+        self.N = len(cifti_imgs)
+        print(f'Found {self.N} cifti images of betas from 1st level GLM')
+        if res_imgs is not None:
+            assert len(res_imgs) == self.N, f"Expected {self.N} residual images, got {len(res_imgs)}"
+
+        # img lists
+        self.cifti_img = cifti_imgs
+        self.res_imgs = res_imgs
+
+        # rois
+        self.roi_names = roi_names
+        self.roi_dict = roi_dict
+
         self.M = M  # pcm models to fit
-        self.glm_path = glm_path  # path to cifti_img
-        self.beta_cifti = beta_cifti  # name of cifti_img
-        self.roi_path = roi_path  # path to individual roi masks, which must be named <atlas_name>.<H>.<roi>.nii
-        self.roi_imgs = roi_imgs  # name of roi files to use as masks, e.g. ROI.L.M1.nii or cerebellum.L.nii
         self.regressor_mapping = regressor_mapping  # dict, maps name of regressors to numbers to control in which order conditions appear in the G matrix
         self.regr_interest = regr_interest  # indexes from regressor mapping of the regressors we want to include in the analysis
-        # self.cond_order = cond_order # order in which conditions should appear in the G matrix
-        self.res_img = res_img
         self.structnames = structnames
         self.n_jobs = n_jobs
 
-    def _make_dataset_within(self, sn, roi_img):
-        print(f'making dataset...{sn} - ROI: {roi_img}')
+        # function to apply to the prewhitened betas before submitting to pcm
+        self.function = function
+        self.function_args = function_args
+
+
+    def _make_dataset_within(self, n, roi_img,):
+        print(f'making dataset...{n+1} - ROI: {roi_img}')
 
         # load betas
-        beta_cifti = nb.load(os.path.join(self.glm_path, sn, self.beta_cifti), mmap=False)
+        beta_cifti = nb.load(self.cifti_img[n], mmap=False)
         beta_img = nt.volume_from_cifti(beta_cifti, struct_names=self.structnames)
 
-        # load residuals
-        res_img = nb.load(os.path.join(self.glm_path, sn, self.res_img))
-        if isinstance(res_img, nb.Cifti2Image): # residuals might be cifti (multivariate prew) or nifti (univariate)
-            res_img = nt.volume_from_cifti(res_img, struct_names=self.structnames)
-
         # load mask
-        mask = nb.load(os.path.join(self.roi_path, sn, roi_img))
+        mask = nb.load(roi_img)
         coords = nt.get_mask_coords(mask)
 
         # load reginfo
@@ -168,33 +224,46 @@ class PcmRois():
         if self.regressor_mapping is not None:
             cond_vec = np.vectorize(self.regressor_mapping.get)(cond_vec)
 
-        # do prewhitening
-        betas_prewhitened = calc_prewhitened_betas(betas=beta_img, residuals=res_img, mask=coords)
+        # load residuals
+        if self.res_imgs is not None:
+            res_img = nb.load(self.res_imgs[n])
+            if isinstance(res_img, nb.Cifti2Image): # residuals might be cifti (multivariate prew) or nifti (univariate)
+                res_img = nt.volume_from_cifti(res_img, struct_names=self.structnames)
 
+            # do prewhitening
+            betas = calc_prewhitened_betas(betas=beta_img, residuals=res_img, mask=coords)
+
+        else:
+            betas = nt.sample_image(beta_img, coords[0], coords[1], coords[2], interpolation=0).T
+            betas = betas[:, ~np.isnan(betas).all(axis=0)]
+            
+        if self.function is not None:
+            betas = function(betas, **self.function_args)
+           
         # make PCM dataset
-        obs_des = {'cond_vec': cond_vec,
-                   'part_vec': part_vec}
+        obs_des = {'cond_vec': cond_vec, 'part_vec': part_vec}
         if self.regr_interest is not None:
             idx = np.isin(cond_vec, self.regr_interest)
-            betas_prewhitened = betas_prewhitened[idx]
+            betas = betas[idx]
             obs_des = {'cond_vec': cond_vec[idx],
                        'part_vec': part_vec[idx]}
-        Y = pcm.dataset.Dataset(betas_prewhitened, obs_descriptors=obs_des)
+        Y = pcm.dataset.Dataset(betas, obs_descriptors=obs_des)
 
         # est 2nd moment
         G_obs, _ = pcm.est_G_crossval(Y.measurements,
                                       Y.obs_descriptors['cond_vec'],
                                       Y.obs_descriptors['part_vec'],
-                                      X=pcm.matrix.indicator(Y.obs_descriptors['part_vec']) #if demean else None
+                                      X=pcm.matrix.indicator(Y.obs_descriptors['part_vec']) #if remove_fixed_effect else None
                                       )
         return Y, G_obs
 
-    def _make_dataset_between(self, roi_img):
+    def _make_dataset_between(self, roi):
+        roi_imgs = self.roi_dict[roi]
+        assert len(roi_imgs)==self.N, f"Expected {self.N} roi images for each roi, got {len(roi_imgs)}"
         G_obs = list()
         Y = list()
-        for s, sn in enumerate(self.snS):
-            print(f'making dataset...subj{sn} - {roi_img}')
-            Y_tmp, G_obs_tmp = self._make_dataset_within(sn, roi_img)
+        for n in range(self.N):
+            Y_tmp, G_obs_tmp = self._make_dataset_within(n, roi_imgs[n])
             Y.append(Y_tmp)
             G_obs.append(G_obs_tmp)
         G_obs = np.array(G_obs)
@@ -205,25 +274,20 @@ class PcmRois():
         T_in, theta_in = pcm.fit_model_individ(Y, self.M, fit_scale=False, verbose=True, fixed_effect='block')
         T_cv, theta_cv = pcm.fit_model_group_crossval(Y, self.M, fit_scale=True, verbose=True, fixed_effect='block')
         T_gr, theta_gr = pcm.fit_model_group(Y, self.M, fit_scale=True, verbose=True, fixed_effect='block')
-
         return T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr
 
-    def run_pcm_in_roi(self, roi_img):
-        Y, G_obs = self._make_dataset_between(roi_img)
+    def run_pcm_in_roi(self, roi):
+        Y, G_obs = self._make_dataset_between(roi)
         T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr = self._fit_model_to_dataset(Y)
-
-        return G_obs, T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr
+        return G_obs, T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr        
 
     def run_parallel_pcm_across_rois(self):
         ##Parallel processing of rois
         with parallel_backend("loky"):  # use threading for debug in PyCharm, for run use loky
             results = Parallel(n_jobs=self.n_jobs)(
                 delayed(self.run_pcm_in_roi)(roi)
-                for roi in self.roi_imgs
+                for roi in self.roi_names
             )
-
-        # for roi in self.roi_imgs:
-        #     self.run_pcm_in_roi(roi)
 
         results = self._extract_results_from_parallel_process(results,
                                       field_names=['G_obs', 'T_in', 'theta_in', 'T_cv', 'theta_cv', 'T_gr', 'theta_gr'])
@@ -233,29 +297,29 @@ class PcmRois():
         with parallel_backend("loky"):  # use threading for debug in PyCharm, for run use loky
             results = Parallel(n_jobs=self.n_jobs)(
                 delayed(self.fit_model_family_in_roi)(roi, model, basecomp, comp_names)
-                for roi in self.roi_imgs
+                for roi in self.roi_names
             )
         results = self._extract_results_from_parallel_process(results, ['T', 'theta'])
         return results
 
-    def fit_model_family_in_roi(self, roi_img, model, basecomp=None, comp_names=None):
+    def fit_model_family_in_roi(self, roi, model, basecomp=None, comp_names=None):
         M, _ = find_model(self.M, model)
         if isinstance(M, pcm.ComponentModel):
             G = M.Gc
             MF = pcm.model.ModelFamily(G, comp_names=comp_names, basecomponents=basecomp)
         elif isinstance(M, pcm.FeatureModel):
             MF = pcm.model.ModelFamily(M, comp_names=comp_names, basecomponents=basecomp)
-        Y, _ = self._make_dataset_between(roi_img)
+        Y, _ = self._make_dataset_between(roi)
         T, theta = pcm.fit_model_individ(Y, MF, verbose=True, fixed_effect='block', fit_scale=False)
 
         return T, theta
 
     def _extract_results_from_parallel_process(self, results, field_names):
-        res_dict = {key: [] for key in ['roi_img'] + field_names}
+        res_dict = {key: [] for key in ['roi'] + field_names}
         for r, result in enumerate(results):
             if len(result) != len(field_names):
                 raise ValueError(f"Expected {len(field_names)} values, got {len(result)} at index {r}")
-            res_dict['roi_img'].append(self.roi_imgs[r])
+            res_dict['roi'].append(self.roi_names[r])
             for key, value in zip(field_names, result):
                 res_dict[key].append(value)
         return res_dict
@@ -276,28 +340,29 @@ def _retry_eagain(callable_, *args, retries=12, delay=0.25, **kwargs):
 
 class PcmSearchlight():
     def __init__(self,
-                 sns: list,
-                 M: list,
-                 glm_path: PathLike,
-                 cifti_img: str,
-                 res_img: str,
-                 searchlight_path: PathLike,
+                 #sns: list,
+                 #glm_path: PathLike,
+                 cifti_img: list,
+                 res_img: list,
+                 searchlight_list: list,
+                 M: list = None,
                  structnames: list=['CortexLeft', 'CortexRight'],
-                 regressor_mapping: dict=None,
+                 regressor_mapping: list | dict=None, # use a list for diffent regr_mapping across participants
                  regr_interest: list=None,
                  n_jobs: int=16,
                  batch_size: int=8):
 
         self.M = M # list of models to fit
-        self.sns = sns # participants ids
+        self.N = len(cifti_img)
+        print(f'Found {self.N} cifti images of betas from 1st level GLM')
+        assert len(res_img) == self.N, f"Expected {self.N} residual images, got {len(res_img)}"
+        assert len(searchlight_list) == self.N, f"Expected {self.N} searchlights, got {len(searchlight_list)}"
+        #self.sns = sns # participants ids
 
-        # paths
-        self.glm_path = glm_path
-        self.searchlight_path = searchlight_path
-
-        # img names
+        # img lists
         self.cifti_img = cifti_img
         self.res_img = res_img
+        self.searchlight_list = searchlight_list
 
         # struct names (for cifti imgs) and hemispheres
         self.structnames = structnames
@@ -309,24 +374,22 @@ class PcmSearchlight():
         self.regressor_mapping = regressor_mapping
         self.regr_interest = regr_interest
 
-        # load betas, residuals and seachlights once
-        # self.coords = self._load_cortical_searchlight()
+        # works with 32k surfaces
         self.n_centre = 32492
-        # self.betas, self.residuals, self.cond_vec, self.part_vec = self._load_betas_and_residuals()
 
         # parallel analysis setup
         self.n_jobs = n_jobs
         self.batch_size = batch_size
 
-    def _make_dataset_within(self, sn, centre):
-        print(f'making dataset...{sn} - centre: {centre}')
+    def _make_dataset_within(self, n, centre):
+        print(f'making dataset...{n} - hemisphere: {self.H}, centre: {centre}')
 
         # load betas
-        cifti_img = nb.load(os.path.join(self.glm_path, sn, self.cifti_img), mmap=False)
+        cifti_img = nb.load(os.path.join(self.cifti_img[n]), mmap=False)
         beta_img = nt.volume_from_cifti(cifti_img, struct_names=[self.structnames])
 
         # load residuals
-        res_img = nb.load(os.path.join(self.glm_path, sn, self.res_img), mmap=False)
+        res_img = nb.load(os.path.join(self.res_img[n]), mmap=False)
         if isinstance(res_img, nb.Cifti2Image):
             res_img = nt.volume_from_cifti(res_img, struct_names=[self.structnames])
 
@@ -336,10 +399,13 @@ class PcmSearchlight():
         part_vec = np.array([int(r[1]) for r in reginfo])
 
         if self.regressor_mapping is not None:
-            cond_vec = np.vectorize(self.regressor_mapping.get)(cond_vec)
+            if isinstance(self.regressor_mapping, dict):
+                cond_vec = np.vectorize(self.regressor_mapping.get)(cond_vec)
+            if isinstance(self.regressor_mapping, list):
+                cond_vec = np.vectorize(self.regressor_mapping[n].get)(cond_vec)
 
         # load searchlight
-        searchlight = sl.load(os.path.join(self.searchlight_path, sn, f'searchlight.{self.H}.h5'), single=True, idx=centre)
+        searchlight = sl.load(os.path.join(self.searchlight_list[n]), single=True, idx=centre)
         shape = searchlight.shape
         affine = searchlight.affine
         vn = searchlight.voxlist
@@ -370,9 +436,9 @@ class PcmSearchlight():
     def _make_dataset_between(self, centre):
         G_obs = list()
         Y = list()
-        for sn in self.sns:
+        for n in range(self.N):
             print(f'making dataset...{centre}')
-            Y_tmp, G_obs_tmp = _retry_eagain(self._make_dataset_within, sn, centre)
+            Y_tmp, G_obs_tmp = _retry_eagain(self._make_dataset_within, n, centre)
             Y.append(Y_tmp)
             G_obs.append(G_obs_tmp)
         G_obs = np.array(G_obs)
@@ -386,13 +452,18 @@ class PcmSearchlight():
 
     def _run_searchlight(self, centre):
         Y, G_obs = self._make_dataset_between(centre)
-        try:
-            T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr = self._fit_model_to_dataset(Y)
-            good = 1
-        except:
-            T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr = [], [], [], [], [], []
-            good = 0
-        return G_obs, T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr, good
+        if self.M is not None:
+            try:
+                T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr = self._fit_model_to_dataset(Y)
+                good = 1
+                print(f'centre {centre}, model fit successful')
+            except Exception as e:
+                print(f'centre {centre}, error in _fit_model_to_dataset:', e)
+                T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr = [], [], [], [], [], []
+                good = 0
+            return G_obs, T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr, good
+        else:
+            return G_obs
 
     def run_seachlight_parallel(self):
         with parallel_backend("loky"):  # use threading for debug in PyCharm, for run use loky
@@ -400,8 +471,23 @@ class PcmSearchlight():
                 delayed(self._run_searchlight)(centre)
                 for centre in range(self.n_centre)
             )
-        G_obs, T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr, good = map(list, zip(*results))
-        return G_obs, T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr, good
+        if self.M is not None:
+            G_obs, T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr, good = map(list, zip(*results))
+            return G_obs, T_in, theta_in, T_cv, theta_cv, T_gr, theta_gr, good
+        else:
+            G_obs = np.array(results)
+            return G_obs
+
+
+def correlation_mle(
+        betas: list,
+        residuals: list,
+        masks: list,
+        cond_vec: list,
+        part_vec: list,
+):
+
+    pass
 
 
 

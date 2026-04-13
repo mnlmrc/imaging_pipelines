@@ -10,6 +10,46 @@ import nibabel as nb
 import pandas as pd
 
 
+def make_cifti_psc(contrast: nb.Cifti2Image,
+                   intercept: nb.Cifti2Image,
+                   SPM: spm.SpmGlm,
+                   masks: list,
+                   struct: list,):
+
+    for i, (s, mask) in enumerate(zip(struct, masks)):
+        atlas = am.AtlasVolumetric('region', mask, structure=s)
+        if i == 0:
+            brain_axis = atlas.get_brain_model_axis()
+            coords = nt.get_mask_coords(mask)
+        else:
+            brain_axis += atlas.get_brain_model_axis()
+            coords = np.concatenate((coords, nt.get_mask_coords(mask)), axis=1)
+
+    if isinstance(contrast, nb.Cifti2Image):
+        row_axis = contrast.header.get_axis(0)
+        contrast = nt.volume_from_cifti(contrast, struct_names=struct)
+    if isinstance(contrast, nb.Nifti1Image):
+        contrast = nt.sample_image(contrast, coords[0], coords[1], coords[2], interpolation=0)
+
+    if isinstance(intercept, nb.Cifti2Image):
+        intercept = nt.volume_from_cifti(intercept, struct_names=struct)
+    if isinstance(intercept, nb.Nifti1Image):
+        intercept = nt.sample_image(intercept, coords[0], coords[1], coords[2], interpolation=0)
+
+    X = SPM.X[:, :SPM.X.shape[1] - intercept.shape[1]]
+    h = np.median(X.max(axis=0))
+    intercept_mean = np.nanmean(intercept, axis=1, keepdims=True)
+    psc = 100 * h * (contrast / intercept_mean)
+
+    header = nb.Cifti2Header.from_axes((row_axis, brain_axis))
+
+    cifti = nb.Cifti2Image(
+        dataobj=psc.T,  # Stack them along the rows (adjust as needed)
+        header=header,  # Use one of the headers (may need to modify)
+    )
+    return cifti
+
+
 def make_cifti_betas(masks: list,
                      struct: list,
                      betas: list = None,
@@ -17,12 +57,15 @@ def make_cifti_betas(masks: list,
                      row_axis: np.ndarray | pd.Series = None):
     """
 
-    :param path_glm:
-    :param masks:
-    :param struct:
-    :param betas:
-    :param row_axis:
-    :return:
+    Args:
+        masks:
+        struct:
+        betas:
+        path_glm:
+        row_axis:
+
+    Returns:
+
     """
 
     if len(masks) != len(struct):
@@ -109,7 +152,11 @@ def make_cifti_contrasts(path_glm: PathLike,
     return cifti
 
 
-def make_cifti_residuals(path_glm, masks, struct):
+def make_cifti_residuals(
+        masks: list,
+        struct: list=['CortexLeft', 'CortexRight'],
+        path_glm: str=None
+    ):
 
     SPM = spm.SpmGlm(path_glm)  #
     SPM.get_info_from_spm_mat()

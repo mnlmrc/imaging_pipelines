@@ -6,12 +6,12 @@ from os import  PathLike
 
 class SurfRois():
     def __init__(self,
-                 atlas_name: str,
                  white: list,
                  pial: list,
                  mask: PathLike,
-                 atlas_dir: PathLike,
                  rois_dir: PathLike,
+                 atlas_dir: PathLike=None,
+                 atlas_name: str=None,
                  space: str='fs32k'
                  ):
         """
@@ -51,7 +51,7 @@ class SurfRois():
 
             amap = list()
             for nlabel, label in enumerate(labels.values()):
-                print(f'making ROI: {label}, {H}')
+                print(f'making {self.atlas_name}: {label}, {H}')
 
                 atlas_hem = self.atlas.get_hemisphere(h)
                 subatlas = atlas_hem.get_subatlas_image(atlas_path, nlabel)
@@ -80,7 +80,7 @@ class SurfRois():
             # save a single nifti with all ROI (per hemisphere)
             am.parcel_combine(roiMasks, os.path.join(self.rois_dir, f'{self.atlas_name}.{H}.nii'))
 
-    def make_hemispheres(self):
+    def make_hemispheres(self, exclude_overlapping=True):
         amap = []
         for h, H in enumerate(self.Hem):
             atlas_hem = self.atlas.get_hemisphere(h)
@@ -98,7 +98,8 @@ class SurfRois():
 
             amap.append(amap_tmp)
 
-        amap = am.exclude_overlapping_voxels(amap, exclude=[(0, 1)])
+        if exclude_overlapping:
+            amap = am.exclude_overlapping_voxels(amap, exclude=[(0, 1)])
         for amap_tmp, H in zip(amap, self.Hem):
             print(f'saving hemisphere {amap_tmp.name}')
             _ = amap_tmp.save_as_image(os.path.join(self.rois_dir, f'Hem.{H}.nii'))

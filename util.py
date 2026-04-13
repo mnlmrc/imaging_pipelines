@@ -1,6 +1,30 @@
 import numpy as np
 import PcmPy as pcm
 
+def extract_mle_corr(M, theta_in, theta_g, cond_effect=False):
+    """
+    Extract MLE correlation estimates from theta coeffiecients fitted using PCM
+
+    :param theta_in:
+    :param theta_g:
+    :return:
+    :cond_effect:
+    """
+    N = theta_in.shape[1]
+    if cond_effect:
+        sigma2_1 = np.exp(theta_in[2])
+        sigma2_2 = np.exp(theta_in[3])
+        sigma2_e = np.exp(theta_in[5])
+    else:
+        sigma2_1 = np.exp(theta_in[0])
+        sigma2_2 = np.exp(theta_in[1])
+        sigma2_e = np.exp(theta_in[3])
+    r_indiv = M.get_correlation(theta_in)
+    SNR = np.sqrt(sigma2_1 * sigma2_2) / sigma2_e
+    theta_g, _ = pcm.group_to_individ_param(theta_g, M, N)
+    r_group = M.get_correlation(theta_g)
+    return r_indiv, r_group, SNR
+
 def bootstrap_summary(r_bootstrap, alpha=0.025):
     """
     Given the retained bootstrap correlations, return:

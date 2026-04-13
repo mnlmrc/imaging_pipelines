@@ -2,6 +2,7 @@ from scipy.optimize import minimize
 import numpy as np
 from nitools import spm
 import itertools
+import pandas as pd
 
 def calc_resms(SPM, y_scl, P, TR, T=16):
     """Return voxelwise ResMS for a given HRF parameter vector P."""
@@ -11,6 +12,12 @@ def calc_resms(SPM, y_scl, P, TR, T=16):
     dof = residuals.shape[0] - np.linalg.matrix_rank(SPM.X)
     rss = np.nansum(residuals * residuals, axis=0)  # voxelwise RSS
     return rss / dof
+
+def calc_R2(Y, Yhat):
+    ss_res = np.nansum((Y - Yhat) ** 2)
+    ss_tot = np.nansum((Y - np.nanmean(Y,axis=0,keepdims=True)) ** 2)
+    return 1 - (ss_res / ss_tot)
+
 
 def objective(P, SPM, y_scl, TR, T=16):
     """Objective function: mean ResMS for given P."""
@@ -41,7 +48,7 @@ def optimise_hrf(SPM, y_scl, P0=None, TR=1, T=16):
     return res.x, res.fun, res
 
 
-def grid_search_hrf(SPM, y_scl, TR=1.0, T=16, P0=None, grid=None, agg="mean", verbose=True):
+def grid_search_hrf(SPM, y_raw, TR=1.0, T=16, P0=None, grid=None, agg="mean", verbose=True):
     """
     Brute-force grid search for HRF params P that minimize mean/median ResMS.
     Returns best_P, best_value, all_results (list of (P, value)).
@@ -67,18 +74,24 @@ def grid_search_hrf(SPM, y_scl, TR=1.0, T=16, P0=None, grid=None, agg="mean", ve
     candidates = [np.asarray(grid.get(i, [P0[i]]), dtype=float) for i in range(7)]
 
     best_P = P0.copy()
-    best_val = np.inf
-    all_results = []
+    best_val = -np.inf
+    params = []
 
     # Evaluate every combination
     for combo in itertools.product(*candidates):
         P = np.array(combo, dtype=float)
-        resms = calc_resms(SPM, y_scl, P, TR, T=T)
-        val = np.nanmean(resms) if agg == "mean" else np.nanmedian(resms)
-        all_results.append((P, float(val)))
-        if val < best_val:
-            best_val = val
+        bf, _ = spm.spm_hrf(TR, P, T)
+        SPM.convolve_glm(bf)
+        _, info, y_filt, y_hat, y_adj, _ = SPM.rerun_glm(y_raw)
+        R2 = calc_R2(y_adj, y_hat)
+        params.append(np.r_[P, R2]) # dont update in a loop
+        if R2 > best_val: # val < best_val:
+            best_val = R2
             best_P = P
-        print(f'tried P={P}, ResMS={val}, best P={best_P}, best ResMS={best_val}') if verbose else None
+        print(f'tried P={P}, R2={R2}, best P={best_P}, best R2={best_val}') if verbose else None
 
-    return best_P, best_val, all_results
+    params_df = pd.DataFrame(np.array(params), 
+        columns = ['delay_response', 'delay_undershoot', 'dispersion_response', 
+        'dispersion_undershoot', 'ratio', 'onset', 'length', 'R_squared'])
+
+    return best_P, best_val, params_df
