@@ -258,7 +258,7 @@ class PcmRois():
         return Y, G_obs
 
     def _make_dataset_between(self, roi):
-        roi_imgs = self.roi_dict[roi]
+        roi_imgs = self.roi_dict[roi] # list of roi images in each participant
         assert len(roi_imgs)==self.N, f"Expected {self.N} roi images for each roi, got {len(roi_imgs)}"
         G_obs = list()
         Y = list()

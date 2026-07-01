@@ -71,7 +71,7 @@ def plot_surf(fig, ax, surf_data, H, vmin=-10, vmax=10, cmap='viridis', col=0, t
     s = np.nanpercentile(np.abs(sulc), 98)
 
     p = pv.Plotter(window_size=(7200, 7200), off_screen=True)
-    p.add_mesh(mesh, scalars="sulc", cmap="Greys", lighting=True, clim=[-s, s], show_scalar_bar=False)
+    p.add_mesh(mesh, scalars="sulc", cmap="Greys", lighting=True, clim=[-s * 2, s], show_scalar_bar=False)
     p.add_mesh(mesh,
                scalars=overlay,
                cmap=cmap if overlay=='overlay' else None,

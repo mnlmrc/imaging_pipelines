@@ -11,7 +11,7 @@ def searchlight_surf(
         savedir: str,
         roi_mask: Optional[list] = [None, None],
         maxradius: Optional[int] = None, # in mm
-        maxvoxels: Optional[int] = None
+        maxvoxels: Optional[int] = np.inf
 ):
 
     structs, Hem = ['CortexLeft', 'CortexRight'], ['L', 'R']

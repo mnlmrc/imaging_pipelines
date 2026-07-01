@@ -30,14 +30,21 @@ def make_cifti_psc(contrast: nb.Cifti2Image,
         contrast = nt.volume_from_cifti(contrast, struct_names=struct)
     if isinstance(contrast, nb.Nifti1Image):
         contrast = nt.sample_image(contrast, coords[0], coords[1], coords[2], interpolation=0)
-
     if isinstance(intercept, nb.Cifti2Image):
         intercept = nt.volume_from_cifti(intercept, struct_names=struct)
     if isinstance(intercept, nb.Nifti1Image):
         intercept = nt.sample_image(intercept, coords[0], coords[1], coords[2], interpolation=0)
 
+    # get convolved regressors
     X = SPM.X[:, :SPM.X.shape[1] - intercept.shape[1]]
-    h = np.median(X.max(axis=0))
+    nRuns  = intercept.shape[1]
+    nConds = X.shape[1] // nRuns
+    
+    # find the median regressor peak across runs
+    #h = np.median(X.max(axis=0))
+    X_max = X.max(axis=0).reshape(nRuns, nConds)
+    h = np.median(X_max, axis=0)
+    
     intercept_mean = np.nanmean(intercept, axis=1, keepdims=True)
     psc = 100 * h * (contrast / intercept_mean)
 
